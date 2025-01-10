@@ -1,10 +1,75 @@
-import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo, Profiler } from 'react';
 import { TokenEventsList } from './components/TokenEventsList';
 import { Token } from './types';
+
+// Performance monitoring types
+type PerformanceMetrics = {
+  lastRenderTime: number;
+  averageRenderTime: number;
+  totalRenders: number;
+};
+
+// Performance helper functions
+const getPerformanceColor = (renderTime: number) => {
+  if (renderTime < 16) return 'bg-green-500'; // 60fps
+  if (renderTime < 32) return 'bg-yellow-500'; // 30fps
+  return 'bg-red-500'; // below 30fps
+};
+
+// Memoized Debug Panel Component
+const DebugPanel = React.memo<{ metrics: PerformanceMetrics }>(({ metrics }) => {
+  if (process.env.NODE_ENV !== 'development') return null;
+  
+  return (
+    <div className="fixed bottom-4 right-4 bg-black/80 text-white p-4 rounded-lg text-sm font-mono z-50">
+      <h3 className="font-bold mb-2">Performance Metrics</h3>
+      <div>Last Render: {metrics.lastRenderTime.toFixed(2)}ms</div>
+      <div>Avg Render: {metrics.averageRenderTime.toFixed(2)}ms</div>
+      <div>Total Renders: {metrics.totalRenders}</div>
+    </div>
+  );
+});
+
+// Memoized Performance Monitor Component
+const PerformanceMonitor = React.memo<{ metrics: PerformanceMetrics }>(({ metrics }) => {
+  if (process.env.NODE_ENV !== 'development') return null;
+
+  return (
+    <div className="w-[90%] mx-auto mt-2">
+      <div className="bg-gray-900/80 backdrop-blur-sm border border-gray-700 rounded-lg">
+        <div className="py-1.5 px-4 flex items-center justify-between text-xs text-white/90">
+          <div className="flex items-center space-x-6">
+            <div className="flex items-center space-x-2">
+              <div className={`h-2 w-2 rounded-full ${getPerformanceColor(metrics.lastRenderTime)}`} />
+              <span>Last: {metrics.lastRenderTime.toFixed(1)}ms</span>
+            </div>
+            <div className="flex items-center space-x-2">
+              <div className={`h-2 w-2 rounded-full ${getPerformanceColor(metrics.averageRenderTime)}`} />
+              <span>Avg: {metrics.averageRenderTime.toFixed(1)}ms</span>
+            </div>
+            <div>FPS: {(1000 / Math.max(metrics.averageRenderTime, 1)).toFixed(1)}</div>
+          </div>
+          <div className="flex items-center space-x-4">
+            <div>Total Renders: {metrics.totalRenders}</div>
+            <div>Memory: {(performance.memory?.usedJSHeapSize / 1024 / 1024).toFixed(1)}MB</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+});
 
 // Add type definitions
 type TimeoutRef = ReturnType<typeof setTimeout>;
 type IntervalRef = ReturnType<typeof setInterval>;
+
+// Add color context
+export const ColorContext = React.createContext({
+  gradientColor1: '#9333ea',
+  gradientColor2: '#ec4899',
+  bgGradientColor1: '#111827',
+  bgGradientColor2: '#374151'
+});
 
 function App() {
   const [tokens, setTokens] = useState<Token[]>([]);
@@ -24,6 +89,87 @@ function App() {
   const RETRY_INTERVAL = 5000;
   const HEARTBEAT_INTERVAL = 15000;
   const HEARTBEAT_TIMEOUT = 5000;
+  const [colors, setColors] = useState({
+    gradientColor1: '#9333ea',
+    gradientColor2: '#ec4899',
+    bgGradientColor1: '#111827',
+    bgGradientColor2: '#374151'
+  });
+  const [performanceMetrics, setPerformanceMetrics] = useState<PerformanceMetrics>({
+    lastRenderTime: 0,
+    averageRenderTime: 0,
+    totalRenders: 0
+  });
+
+  // Performance observer setup with optimized update logic
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'development') {
+      let updateTimeout: NodeJS.Timeout;
+      let measurementsBuffer: PerformanceEntry[] = [];
+      
+      const observer = new PerformanceObserver((list) => {
+        measurementsBuffer = [...measurementsBuffer, ...list.getEntries()];
+        
+        // Debounce updates and batch process measurements
+        clearTimeout(updateTimeout);
+        updateTimeout = setTimeout(() => {
+          if (measurementsBuffer.length === 0) return;
+          
+          const measurements = measurementsBuffer;
+          measurementsBuffer = [];
+          
+          setPerformanceMetrics(prev => {
+            const totalDuration = measurements.reduce((sum, entry) => sum + entry.duration, 0);
+            const avgDuration = totalDuration / measurements.length;
+            
+            // Skip update if change is minimal
+            if (Math.abs(avgDuration - prev.averageRenderTime) < 1) {
+              return prev;
+            }
+            
+            return {
+              lastRenderTime: measurements[measurements.length - 1].duration,
+              averageRenderTime: (prev.averageRenderTime * prev.totalRenders + totalDuration) / 
+                                (prev.totalRenders + measurements.length),
+              totalRenders: prev.totalRenders + measurements.length
+            };
+          });
+        }, 2000); // Increased debounce time to reduce updates
+      });
+
+      observer.observe({ entryTypes: ['measure'] });
+      return () => {
+        clearTimeout(updateTimeout);
+        observer.disconnect();
+      };
+    }
+  }, []);
+
+  // Profiler callback
+  const onRenderCallback = (
+    id: string,
+    phase: string,
+    actualDuration: number,
+    baseDuration: number,
+    startTime: number,
+    commitTime: number
+  ) => {
+    if (process.env.NODE_ENV === 'development') {
+      performance.measure(
+        'React Render',
+        { start: startTime, end: commitTime }
+      );
+      
+      console.debug('Render Performance:', {
+        component: id,
+        phase,
+        actualDuration,
+        baseDuration,
+        startTime,
+        commitTime
+      });
+    }
+  };
 
   // Add logging wrapper
   const log = {
@@ -321,75 +467,109 @@ function App() {
     }
   }, [retryCount]);
 
-  const handleReconnectClick = () => {
+  const handleReconnectClick = useCallback(() => {
     log.info('Manual reconnection requested');
     setRetryCount(0);
     connectWebSocket();
-  };
+  }, [connectWebSocket]);
 
-  const handleRefreshTokens = () => {
+  const handleRefreshTokens = useCallback(() => {
     log.info('Manual token refresh requested');
     fetchTokens();
-  };
+  }, [fetchTokens]);
+
+  // Memoize expensive computations and callbacks
+  const memoizedTokens = useMemo(() => tokens, [tokens]);
+  
+  // Memoize the color context value
+  const colorContextValue = useMemo(() => colors, [colors]);
+
+  // Memoize onColorsChange callback
+  const handleColorChange = useCallback((newColors) => setColors(newColors), []);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-700 border border-gray-600 relative">
-      {/* Top Container - Always on top */}
-      <div className="fixed top-0 left-0 right-0 h-24 bg-gradient-to-br from-gray-900 via-gray-800 to-gray-700 z-50 border-b border-gray-600">
-        {/* Combined Status Bar */}
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 w-[calc(100%-4rem)] bg-gradient-to-b from-purple-600/90 to-pink-600/90 backdrop-blur-md shadow-lg border border-gray-500 rounded-xl">
-          <div className="px-6 py-3 flex items-center justify-between border border-gray-500 rounded-lg">
-            <div className="flex items-center space-x-6 border-r border-gray-500 pr-6">
-              {/* Title */}
-              <h1 className="text-xl flex items-center gap-2 font-['Bebas_Neue'] font-normal">
-                <span className="text-2xl">💎</span>
-                <span className="text-white tracking-wide">
-                  Token Explorer
-                </span>
-              </h1>
+    <Profiler id="App" onRender={onRenderCallback}>
+      <ColorContext.Provider value={colorContextValue}>
+        <div className="min-h-screen" style={{
+          background: `linear-gradient(to bottom right, ${colors.bgGradientColor1}, ${colors.bgGradientColor2})`
+        }}>
+          {/* Top Container - Always on top */}
+          <div className="fixed top-0 left-0 right-0 h-28 flex flex-col justify-center w-full" style={{
+            background: `linear-gradient(to bottom right, ${colors.bgGradientColor1}, ${colors.bgGradientColor2})`
+          }}>
+            {/* Combined Status Bar */}
+            <div className="w-[90%] mx-auto backdrop-blur-md shadow-lg border border-gray-500 rounded-xl" style={{
+              background: `linear-gradient(to bottom, ${colors.gradientColor1}E6, ${colors.gradientColor2}E6)`
+            }}>
+              <div className="px-6 py-3 flex items-center justify-between border border-gray-500 rounded-lg">
+                <div className="flex items-center space-x-6 border-r border-gray-500 pr-6">
+                  {/* Title */}
+                  <h1 className="text-xl flex items-center gap-2 font-['Bebas_Neue'] font-normal">
+                    <span className="text-2xl">💎</span>
+                    <span className="text-white tracking-wide">
+                      Token Explorer
+                    </span>
+                  </h1>
 
-              {/* Connection Status */}
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                  <div className="relative flex h-2 w-2">
-                    {isConnected && (
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                    )}
-                    <span className={`relative inline-flex rounded-full h-2 w-2 ${isConnected ? 'bg-green-400' : 'bg-red-400'}`}></span>
+                  {/* Connection Status */}
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2">
+                      <div className="relative flex h-2 w-2">
+                        {isConnected && (
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                        )}
+                        <span className={`relative inline-flex rounded-full h-2 w-2 ${isConnected ? 'bg-green-400' : 'bg-red-400'}`}></span>
+                      </div>
+                      <span className="text-sm text-white/90">{isConnected ? 'Connected' : 'Disconnected'}</span>
+                    </div>
+                    <div className="text-sm text-white/80">
+                      Retry Count: {retryCount}/{MAX_RETRIES}
+                    </div>
                   </div>
-                  <span className="text-sm text-white/90">{isConnected ? 'Connected' : 'Disconnected'}</span>
                 </div>
-                <div className="text-sm text-white/80">
-                  Retry Count: {retryCount}/{MAX_RETRIES}
+
+                {/* Action Buttons */}
+                <div className="flex items-center gap-2 pl-6 border-l border-gray-500">
+                  <button
+                    onClick={handleReconnectClick}
+                    className="px-3 py-1 bg-white/20 hover:bg-white/30 text-white rounded backdrop-blur-sm transition-colors duration-150 text-sm border border-gray-500"
+                  >
+                    Reconnect
+                  </button>
+                  <button
+                    onClick={handleRefreshTokens}
+                    className="px-3 py-1 bg-white/20 hover:bg-white/30 text-white rounded backdrop-blur-sm transition-colors duration-150 text-sm border border-gray-500"
+                  >
+                    Refresh Tokens
+                  </button>
                 </div>
               </div>
             </div>
 
-            {/* Action Buttons */}
-            <div className="flex items-center gap-2 pl-6 border-l border-gray-500">
-              <button
-                onClick={handleReconnectClick}
-                className="px-3 py-1 bg-white/20 hover:bg-white/30 text-white rounded backdrop-blur-sm transition-colors duration-150 text-sm border border-gray-500"
-              >
-                Reconnect
-              </button>
-              <button
-                onClick={handleRefreshTokens}
-                className="px-3 py-1 bg-white/20 hover:bg-white/30 text-white rounded backdrop-blur-sm transition-colors duration-150 text-sm border border-gray-500"
-              >
-                Refresh Tokens
-              </button>
-            </div>
+            {/* Performance Monitor */}
+            {process.env.NODE_ENV === 'development' && (
+              <PerformanceMonitor metrics={performanceMetrics} />
+            )}
           </div>
+
+          {/* Main Content - Adjust padding to account for new top container height */}
+          <div className="pt-32 relative z-0">
+            {loading && <div className="p-4 border border-gray-600">Loading tokens...</div>}
+            {!loading && (
+              <React.Suspense fallback={<div>Loading...</div>}>
+                <TokenEventsList 
+                  tokens={memoizedTokens} 
+                  onColorsChange={handleColorChange} 
+                />
+              </React.Suspense>
+            )}
+          </div>
+
+          {/* Debug Panel */}
+          <DebugPanel metrics={performanceMetrics} />
         </div>
-      </div>
-      
-      {/* Main Content - Starts below fixed top section */}
-      <div className="pt-24 relative z-0">
-        {loading && <div className="p-4 border border-gray-600">Loading tokens...</div>}
-        {!loading && <TokenEventsList tokens={tokens} />}
-      </div>
-    </div>
+      </ColorContext.Provider>
+    </Profiler>
   );
 }
 
