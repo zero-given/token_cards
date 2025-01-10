@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { Shield, Info, Activity, FileText, Lock, Users, AlertTriangle, DollarSign, Network } from 'lucide-react';
+import { Shield, Info, Activity, FileText, Lock, Users, AlertTriangle, DollarSign, Network, Clock } from 'lucide-react';
 import { Token } from '../types';
 import { TokenLiquidityChart } from './TokenLiquidityChart';
 
@@ -34,6 +34,10 @@ export const TokenEventCard: React.FC<TokenEventCardProps> = ({ token }) => {
   const getWarningReasons = () => {
     const reasons = [];
     
+    // Danger level warnings
+    if (token.isHoneypot) reasons.push('TOKEN IS A HONEYPOT - Cannot sell tokens');
+    if (token.gpIsBlacklisted && !token.gpIsAntiWhale) reasons.push('Token is blacklisted (not anti-whale)');
+    
     // Contract security warnings
     if (!token.gpIsOpenSource) reasons.push('Contract is not open source');
     if (token.gpIsProxy) reasons.push('Contract uses proxy pattern');
@@ -63,7 +67,8 @@ export const TokenEventCard: React.FC<TokenEventCardProps> = ({ token }) => {
   };
 
   const warningReasons = getWarningReasons();
-  const securityLevel = token.isHoneypot ? 'danger' : 
+  const isDangerousBlacklist = token.gpIsBlacklisted && !token.gpIsAntiWhale;
+  const securityLevel = token.isHoneypot || isDangerousBlacklist ? 'danger' : 
                        warningReasons.length > 0 ? 'warning' : 'safe';
 
   // Helper function to safely convert values to string
@@ -93,6 +98,16 @@ export const TokenEventCard: React.FC<TokenEventCardProps> = ({ token }) => {
   // Helper function to format timestamp
   const formatTimestamp = (timestamp: number | undefined) => {
     if (!timestamp) return 'N/A';
+    console.log('Converting timestamp:', timestamp);
+    console.log('Converted date:', new Date(timestamp * 1000).toLocaleString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    }));
     return new Date(timestamp * 1000).toLocaleString('en-US', {
       year: 'numeric',
       month: 'short',
@@ -124,19 +139,56 @@ export const TokenEventCard: React.FC<TokenEventCardProps> = ({ token }) => {
                 {securityLevel.toUpperCase()}
               </span>
               {token.gpIsBlacklisted && (
-                <span className="text-sm font-medium bg-red-100 text-red-800 border border-red-200 flex items-center px-3 py-1 rounded-full">
+                <span className={`text-sm font-medium ${token.gpIsAntiWhale ? 'bg-blue-100 text-blue-800 border border-blue-200' : 'bg-red-100 text-red-800 border border-red-200'} flex items-center px-3 py-1 rounded-full`}>
                   <AlertTriangle className="w-4 h-4 mr-1" />
-                  BLACKLISTED
+                  {token.gpIsAntiWhale ? 'ANTI-WHALE' : 'BLACKLISTED'}
+                </span>
+              )}
+              {/* Token Age from Creation Time */}
+              {(() => {
+                if (!token.creationTime) return null;
+                const creationDate = new Date(token.creationTime * 1000);
+                const currentTime = new Date();
+                const ageInMinutes = Math.floor((currentTime.getTime() - creationDate.getTime()) / (1000 * 60));
+                return (
+                  <span className="text-sm font-medium bg-blue-100 text-blue-800 border border-blue-200 flex items-center px-3 py-1 rounded-full">
+                    <Clock className="w-4 h-4 mr-1" />
+                    {ageInMinutes} min old
+                  </span>
+                );
+              })()}
+              {/* Token Age Hours Raw */}
+              {token.ageHours !== undefined && (
+                <span className="text-sm font-medium bg-yellow-100 text-yellow-800 border border-yellow-200 flex items-center px-3 py-1 rounded-full">
+                  <Clock className="w-4 h-4 mr-1" />
+                  {token.ageHours.toFixed(2)}h
+                </span>
+              )}
+              {/* Token Age Hours Formatted */}
+              {token.ageHours !== undefined && (
+                <span className="text-sm font-medium bg-yellow-100 text-yellow-800 border border-yellow-200 flex items-center px-3 py-1 rounded-full">
+                  <Clock className="w-4 h-4 mr-1" />
+                  {Math.floor(token.ageHours)}h {Math.round((token.ageHours % 1) * 60)}m
                 </span>
               )}
             </div>
           </div>
 
-          {/* Warning Reasons Panel - Only show for warning status */}
-          {securityLevel === 'warning' && (
-            <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-              <h4 className="text-sm font-semibold text-yellow-800 mb-2">Warning Reasons:</h4>
-              <ul className="text-sm text-yellow-700 space-y-1 list-disc pl-4">
+          {/* Warning/Danger Reasons Panel */}
+          {(securityLevel === 'warning' || securityLevel === 'danger') && (
+            <div className={`mb-6 p-4 ${
+              securityLevel === 'danger' 
+                ? 'bg-red-50 border border-red-200' 
+                : 'bg-yellow-50 border border-yellow-200'
+            } rounded-lg`}>
+              <h4 className={`text-sm font-semibold ${
+                securityLevel === 'danger' ? 'text-red-800' : 'text-yellow-800'
+              } mb-2`}>
+                {securityLevel === 'danger' ? 'Danger Reasons:' : 'Warning Reasons:'}
+              </h4>
+              <ul className={`text-sm ${
+                securityLevel === 'danger' ? 'text-red-700' : 'text-yellow-700'
+              } space-y-1 list-disc pl-4`}>
                 {warningReasons.map((reason, index) => (
                   <li key={index}>{reason}</li>
                 ))}

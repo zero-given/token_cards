@@ -11,7 +11,11 @@ interface FilterState {
   minLiquidity: number;
   hideHoneypots: boolean;
   showOnlyHoneypots: boolean;
-  sortBy: 'creationTime' | 'holders' | 'liquidity' | 'safetyScore';
+  hideDanger: boolean;
+  hideWarning: boolean;
+  showOnlySafe: boolean;
+  searchQuery: string;
+  sortBy: 'creationTime' | 'holders' | 'liquidity' | 'safetyScore' | 'age';
   sortDirection: 'asc' | 'desc';
   maxRecords: number;
 }
@@ -23,8 +27,12 @@ export const TokenEventsList: React.FC<TokenEventsListProps> = ({ tokens }) => {
     minLiquidity: 0,
     hideHoneypots: false,
     showOnlyHoneypots: false,
-    sortBy: 'creationTime',
-    sortDirection: 'desc',
+    hideDanger: false,
+    hideWarning: false,
+    showOnlySafe: false,
+    searchQuery: '',
+    sortBy: 'age',
+    sortDirection: 'asc',
     maxRecords: 50
   });
 
@@ -38,11 +46,47 @@ export const TokenEventsList: React.FC<TokenEventsListProps> = ({ tokens }) => {
       const holderCount = token.gpHolderCount || 0;
       const liquidity = token.liq30 || 0;
       const isHoneypot = token.isHoneypot || false;
+      const isDangerousBlacklist = token.gpIsBlacklisted && !token.gpIsAntiWhale;
+      const isDangerous = isHoneypot || isDangerousBlacklist;
+      const hasWarnings = !isDangerous && (
+        !token.gpIsOpenSource ||
+        token.gpIsProxy ||
+        token.gpIsMintable ||
+        token.gpExternalCall ||
+        token.gpCannotBuy ||
+        token.gpCannotSellAll ||
+        token.gpTradingCooldown ||
+        token.gpTransferPausable ||
+        token.gpHiddenOwner ||
+        token.gpCanTakeBackOwnership ||
+        token.gpOwnerChangeBalance ||
+        token.gpBuyTax > 10 ||
+        token.gpSellTax > 10 ||
+        (token.gpIsAntiWhale && token.gpAntiWhaleModifiable) ||
+        token.gpSlippageModifiable
+      );
+      const isSafe = !isDangerous && !hasWarnings;
 
+      // Search filter
+      if (filters.searchQuery) {
+        const searchLower = filters.searchQuery.toLowerCase();
+        const nameMatch = token.name?.toLowerCase().includes(searchLower);
+        const symbolMatch = token.symbol?.toLowerCase().includes(searchLower);
+        if (!nameMatch && !symbolMatch) return false;
+      }
+
+      // Basic filters
       if (holderCount < filters.minHolders) return false;
       if (liquidity < filters.minLiquidity) return false;
+      
+      // Honeypot filters
       if (filters.hideHoneypots && isHoneypot) return false;
       if (filters.showOnlyHoneypots && !isHoneypot) return false;
+
+      // Security level filters
+      if (filters.hideDanger && isDangerous) return false;
+      if (filters.hideWarning && hasWarnings) return false;
+      if (filters.showOnlySafe && !isSafe) return false;
 
       return true;
     }).slice(0, filters.maxRecords);
@@ -54,9 +98,11 @@ export const TokenEventsList: React.FC<TokenEventsListProps> = ({ tokens }) => {
       const direction = filters.sortDirection === 'asc' ? 1 : -1;
       
       switch (filters.sortBy) {
+        case 'age':
+          return direction * ((a.ageHours || 0) - (b.ageHours || 0));
         case 'creationTime':
-          const timeA = a.pairInfo?.creationTime || 0;
-          const timeB = b.pairInfo?.creationTime || 0;
+          const timeA = a.creationTime || 0;
+          const timeB = b.creationTime || 0;
           return direction * (timeA - timeB);
         case 'holders':
           return direction * ((a.gpHolderCount || 0) - (b.gpHolderCount || 0));
@@ -106,6 +152,20 @@ export const TokenEventsList: React.FC<TokenEventsListProps> = ({ tokens }) => {
                 <h2 className="text-lg font-normal mb-4 font-['Bebas_Neue'] text-white border-b border-gray-500 pb-2 tracking-wide">Filters & Sorting</h2>
                 
                 <div className="space-y-4">
+                  {/* Search Box */}
+                  <div className="border border-gray-500 rounded-lg p-2">
+                    <label className="block text-sm font-medium text-white/90">
+                      Search Token Name
+                    </label>
+                    <input
+                      type="text"
+                      value={filters.searchQuery}
+                      onChange={(e) => handleFilterChange('searchQuery', e.target.value)}
+                      placeholder="Enter token name..."
+                      className="mt-1 block w-full rounded-md bg-gray-800 border-gray-500 text-white shadow-sm focus:border-white/30 focus:ring-white/30 placeholder-gray-500"
+                    />
+                  </div>
+
                   {/* Add the new filter before the sorting controls */}
                   <div className="border border-gray-500 rounded-lg p-2">
                     <label className="block text-sm font-medium text-white/90">
@@ -131,6 +191,7 @@ export const TokenEventsList: React.FC<TokenEventsListProps> = ({ tokens }) => {
                       onChange={(e) => handleFilterChange('sortBy', e.target.value)}
                       className="mt-1 block w-full rounded-md bg-gray-800 border-gray-500 text-white shadow-sm focus:border-white/30 focus:ring-white/30"
                     >
+                      <option value="age" className="bg-gray-800">Token Age</option>
                       <option value="creationTime" className="bg-gray-800">Token Creation Time</option>
                       <option value="holders" className="bg-gray-800">Token Holders</option>
                       <option value="liquidity" className="bg-gray-800">Token Liquidity</option>
@@ -181,8 +242,45 @@ export const TokenEventsList: React.FC<TokenEventsListProps> = ({ tokens }) => {
                     />
                   </div>
 
+                  {/* Security Level Filters */}
+                  <div className="border border-gray-500 rounded-lg p-2 space-y-2">
+                    <h3 className="text-sm font-medium text-white/90 mb-2">Security Filters</h3>
+                    
+                    <label className="flex items-center">
+                      <input
+                        type="checkbox"
+                        checked={filters.hideDanger}
+                        onChange={(e) => handleFilterChange('hideDanger', e.target.checked)}
+                        className="rounded border-gray-500 bg-gray-800 text-pink-600 shadow-sm focus:border-white/30 focus:ring-white/30"
+                      />
+                      <span className="ml-2 text-sm text-white/90">Hide Dangerous Tokens</span>
+                    </label>
+
+                    <label className="flex items-center">
+                      <input
+                        type="checkbox"
+                        checked={filters.hideWarning}
+                        onChange={(e) => handleFilterChange('hideWarning', e.target.checked)}
+                        className="rounded border-gray-500 bg-gray-800 text-pink-600 shadow-sm focus:border-white/30 focus:ring-white/30"
+                      />
+                      <span className="ml-2 text-sm text-white/90">Hide Warning Tokens</span>
+                    </label>
+
+                    <label className="flex items-center">
+                      <input
+                        type="checkbox"
+                        checked={filters.showOnlySafe}
+                        onChange={(e) => handleFilterChange('showOnlySafe', e.target.checked)}
+                        className="rounded border-gray-500 bg-gray-800 text-pink-600 shadow-sm focus:border-white/30 focus:ring-white/30"
+                      />
+                      <span className="ml-2 text-sm text-white/90">Show Only Safe Tokens</span>
+                    </label>
+                  </div>
+
                   {/* Honeypot Controls */}
                   <div className="border border-gray-500 rounded-lg p-2 space-y-2">
+                    <h3 className="text-sm font-medium text-white/90 mb-2">Honeypot Filters</h3>
+                    
                     <label className="flex items-center">
                       <input
                         type="checkbox"
